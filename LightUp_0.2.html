@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LightUp — Unmarked</title>
+<title>The Museum of Necessary Lessons</title>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; overflow: hidden; background: #050606; color: #bec4c0; font: 12px 'Courier New', monospace; }
@@ -31,6 +31,47 @@
   #roomTools input[type=number], #roomTools select { width:100%; padding:7px; background:#242c26; color:#d0d6ce; border:1px solid #627064; font:inherit; }
   #roomTools .toolActions { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; }
   #roomStats { white-space:pre-line; line-height:1.6; color:#929e94; }
+
+  /* Museum / exhibit presentation layer. This is intentionally DOM-based so
+     narration and exhibit labels remain legible over the low-poly WebGL scene. */
+  body.museum-mode #mapButton, body.museum-mode #mapCanvas { display:none !important; }
+  body.museum-mode #status { text-transform:uppercase; letter-spacing:.14em; color:#9d9480; }
+  #museumTitleCard {
+    position:fixed; z-index:12; left:50%; top:12%; width:min(620px,calc(100vw - 44px));
+    transform:translate(-50%,-10px); padding:17px 22px; border:1px solid #8c806555;
+    background:linear-gradient(180deg,#171611ed,#090a09ed); box-shadow:0 14px 60px #000b;
+    text-align:center; opacity:0; pointer-events:none; transition:opacity .35s,transform .35s;
+  }
+  #museumTitleCard.visible { opacity:1; transform:translate(-50%,0); }
+  #museumTitleCard strong { display:block; color:#d7cfba; font-size:14px; font-weight:normal; letter-spacing:.18em; text-transform:uppercase; }
+  #museumTitleCard span { display:block; margin-top:9px; color:#948f82; line-height:1.65; letter-spacing:.035em; }
+  #museumSubtitle {
+    position:fixed; z-index:12; left:50%; bottom:96px; width:min(790px,calc(100vw - 42px));
+    transform:translateX(-50%); padding:10px 14px; text-align:center; line-height:1.65;
+    background:#050706b5; border-top:1px solid #7f796744; border-bottom:1px solid #7f796722;
+    color:#d0d0c8; text-shadow:0 2px 6px #000; opacity:0; transition:opacity .16s; pointer-events:none;
+  }
+  #museumSubtitle.visible { opacity:1; }
+  #museumSubtitle b { color:#9e947d; font-weight:normal; letter-spacing:.12em; margin-right:8px; }
+  #museumChoice {
+    position:fixed; z-index:12; left:50%; bottom:52px; transform:translateX(-50%);
+    color:#a69c86; letter-spacing:.18em; text-transform:uppercase; opacity:0; pointer-events:none;
+  }
+  #museumChoice.visible { opacity:.92; }
+  #analogOverlay {
+    position:fixed; z-index:10; inset:0; pointer-events:none; opacity:.2; mix-blend-mode:screen;
+    background:
+      repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0,rgba(255,255,255,.025) 1px,rgba(0,0,0,.03) 1px,rgba(0,0,0,.03) 3px),
+      radial-gradient(ellipse at center,transparent 46%,rgba(0,0,0,.26) 100%);
+  }
+  #analogOverlay::after {
+    content:""; position:absolute; inset:-20%; opacity:.08;
+    background:repeating-linear-gradient(90deg,transparent 0 11px,#d6c5a711 12px,#99b6a20b 13px,transparent 14px 27px);
+    animation:museumDrift 9s steps(7,end) infinite;
+  }
+  @keyframes museumDrift { 0%{transform:translate3d(-2%,0,0)} 50%{transform:translate3d(2%,.5%,0)} 100%{transform:translate3d(-1%,-.3%,0)} }
+  body.museum-distort #analogOverlay { opacity:.38; filter:contrast(1.3) saturate(.7); }
+
   @media (max-width: 560px) { #entry h1 { font-size: 19px; } #controls { font-size: 10px; } #mapCanvas { width: 170px; height: 170px; } }
 </style>
 </head>
@@ -41,6 +82,10 @@
 <div id="entry"><h1>LIGHTUP</h1><p>Unmarked rooms. No end in sight.</p><p>WASD move · Mouse / arrows look<br>Shift sprint · E interact · M map · Hold C controls<br>F2 room tools · B sound</p><button class="start" id="startButton">Click to explore</button></div>
 <div id="controls">WASD move · Mouse / arrows look<br>Shift sprint · E interact · M map · Esc release mouse<br>F2 room tools · B sound</div>
 <div id="reticle"></div><div id="interaction"></div><div id="status">Fragments 0</div>
+<div id="museumTitleCard"><strong></strong><span></span></div>
+<div id="museumSubtitle"><b></b><span></span></div>
+<div id="museumChoice"></div>
+<div id="analogOverlay" aria-hidden="true"></div>
 <div id="error"></div>
 <canvas id="debugCanvas" aria-hidden="true"></canvas>
 <aside id="roomTools" hidden aria-label="Room generation tools"></aside>
@@ -65,6 +110,71 @@ const discovered = new Set(['0,0']), collected = new Set();
 const keys = new Set();
 const memoryStates=new Map(),pocketRooms=new Map(),instanceModels=new Map();
 const memoryQuery=new URLSearchParams(location.search);
+const MUSEUM_MODE=memoryQuery.get('legacy')!=='1';
+const MUSEUM_ROOM_DEFS=Object.freeze({
+  '0,0':{role:'lobby',sides:[0],kind:'empty',height:4.35,title:'THE MUSEUM OF NECESSARY LESSONS'},
+  '1,0':{role:'comedian-intro',sides:[0,2],kind:'empty',height:4.1,title:'EXHIBIT 01 — THE COMEDIAN WHO WHINES'},
+  '2,0':{role:'comedian-trial',sides:[0,2],kind:'empty',height:4.0,title:'THE CORRECTION'},
+  '3,0':{role:'comedian-final',sides:[0,2],kind:'empty',height:4.15,title:'FINAL OBJECT'},
+  '4,0':{role:'future-wing',sides:[2],kind:'empty',height:4.25,title:'FURTHER EXHIBITS'}
+});
+const MUSEUM_INTERPRETATIONS=[
+  {name:'JOKE',line:'ADULT REFUSES TO GROW UP.'},
+  {name:'COMPLAINT',line:'ANOTHER ADULT EXPECTING THE WORLD TO CARRY THEM.'},
+  {name:'CONFESSION',line:'I DO NOT KNOW WHY THIS BOTHERS ME.'}
+];
+const COMEDIAN_INTRO_NARRATION=[
+  'Welcome, visitor.',
+  'You are now entering Exhibit One. The Comedian Who Whines.',
+  'Please remain behind the viewing line.',
+  'The comedian would take the stage and look upon the audience.',
+  'He would survey them carefully.',
+  'He would see who could be targeted, and who could not.',
+  'The confident were rarely useful. The powerful could answer back. The angry might interrupt.',
+  'So he searched instead for someone uncertain.',
+  'Someone visible.',
+  'Someone polite enough to remain seated while a stranger dismantled them beneath a spotlight.',
+  'He would ask a question. A simple question, presented as harmless.',
+  'Where are you from? What do you do? Who did you arrive with?',
+  'The chosen person would answer honestly.',
+  'This was their first mistake.',
+  'The comedian would take the answer and examine it.',
+  'He would remove its circumstances. He would discard whatever made it complicated.',
+  'He would stretch one detail, shorten another, and replace what remained with something easier for the audience to recognize.',
+  'A person became a character. A circumstance became a flaw. A perspective became a fable.',
+  'The fable became a mockery.',
+  'And the mockery became truth, provided enough people laughed.',
+  'As the comedian drew near his conclusion, he would begin to whine.',
+  'He complained about the foolish. He complained about the poor.',
+  'He complained about the lonely, the frightened, the dependent, and the desperate.',
+  'He complained as though observation were experience.',
+  'He complained as though ridicule were instruction.',
+  'He complained as though every difficult life contained a simple answer, and that he alone had been clever enough to notice it.',
+  'The audience laughed. Therefore, he believed himself understood.',
+  'The subject remained silent. Therefore, he believed himself correct.',
+  'But silence is not always agreement.',
+  'Sometimes, a person is simply waiting for the laughter to end.',
+  'A lesson was therefore prepared.',
+  'The comedian will now be given the opportunity to experience the lives he explained so confidently.',
+  'He will be permitted to speak. He will be permitted to object. He will be permitted to clarify what he meant.',
+  'Whether he will be heard is another matter.',
+  'Please proceed. The performance is about to begin.'
+];
+const COMEDIAN_FINAL_JUDGMENT=[
+  'The comedian wanted others to understand that suffering was simple.',
+  'Therefore, his suffering was simplified.',
+  'He wanted every problem to have an obvious answer.',
+  'Therefore, an answer was provided.',
+  'He wanted the troubled to stop complaining.',
+  'In time, he did.',
+  'This concludes the exhibit.',
+  'Please indicate your agreement by proceeding through the open door.'
+];
+const museumState={role:null,previousRole:null,enteredAt:0,sequenceToken:0,dialIndex:0,distortion:0,lastSave:0,lookAwayClock:0,finalJudgmentPlayed:false};
+const MUSEUM_SAVE_KEY='rooms.museum.observation.v1';
+let museumObservation={roomTime:{},lookAway:0,restrictedAttempts:0,dialChoices:[],backtracks:0,explanationOverrides:0,visits:[],startedAt:Date.now()};
+try{museumObservation={...museumObservation,...JSON.parse(localStorage.getItem(MUSEUM_SAVE_KEY)||'{}')};museumObservation.roomTime=museumObservation.roomTime||{};museumObservation.dialChoices=museumObservation.dialChoices||[];museumObservation.visits=museumObservation.visits||[];}catch(error){}
+let museumSubtitleTimer=0,museumCardTimer=0,museumNarrationToken=0,museumClapTimer=null,museumAudioCtx=null;
 const memorySettings={archetype:memoryQuery.get('archetype')||'',salt:Number(memoryQuery.get('variation'))||0,width:44,depth:44,height:0,archetypeChance:.32,ambientLight:.055,
   architecturalDistortion:.8,furnitureMisplacement:.8,furnitureStacking:.6,objectIntersection:.6,gravityAnomalies:.7,scaleInconsistency:.65,
   mannequinPopulation:.65,mannequinBehavior:.5,repetition:.7,observationChanges:.45,roomEmptiness:.8,environmentalContradiction:.8,
@@ -238,7 +348,9 @@ function addFixture(mesh,fixture,height,pendant) {
 // can be genuine one-door dead ends. Both endpoints derive the same edge.
 const sectionIsLeaf=(x,y)=>Math.abs(x%2)===1&&Math.abs(y%2)===1;
 const leafEntrance=(x,y)=>hash(x,y,71)%4;
+function museumRoomSpec(cx,cy){return MUSEUM_MODE?MUSEUM_ROOM_DEFS[chunkKey(cx,cy)]||null:null;}
 function sectionSides(cx,cy) {
+  const museum=museumRoomSpec(cx,cy);if(museum)return [...museum.sides];
   if(sectionIsLeaf(cx,cy))return [leafEntrance(cx,cy)];
   return [0,1,2,3].filter(side=>{
     const x=cx+[1,0,-1,0][side],y=cy+[0,1,0,-1][side];
@@ -246,7 +358,9 @@ function sectionSides(cx,cy) {
   });
 }
 function sectionSpec(cx,cy) {
-  const sides=sectionSides(cx,cy),n=hash(cx,cy,73);
+  const sides=sectionSides(cx,cy),museum=museumRoomSpec(cx,cy);
+  if(museum)return {sides,kind:museum.kind||'empty',variation:.5,height:museum.height||4.1,museumRole:museum.role,archetype:null,pocket:null};
+  const n=hash(cx,cy,73);
   let kind;
   if(sectionIsLeaf(cx,cy))kind=['empty','empty','empty','deadend','maze'][n%5];
   else if(sides.length===2&&n%3===0)kind='hallway';
@@ -1685,7 +1799,7 @@ function regenerateMemoryRoom() {
   for(const room of chunks.values())disposeRoom(room);chunks.clear();doors.clear();previews.clear();memoryStates.clear();pocketRooms.clear();
   lastEnteredRoom=null;
   discovered.clear();discovered.add('0,0');collected.clear();
-  Object.assign(player,{x:CELL*1.5,y:CELL*1.5,z:EYE_HEIGHT,yaw:.35,pitch:0,vx:0,vy:0,fragments:0,stamina:1,sprintRecovery:0});resetLocomotion();status.textContent='Fragments 0';
+  Object.assign(player,{x:CELL*1.5,y:CELL*1.5,z:EYE_HEIGHT,yaw:.35,pitch:0,vx:0,vy:0,fragments:0,stamina:1,sprintRecovery:0});resetLocomotion();status.textContent=MUSEUM_MODE?'EXHIBIT 01':'Fragments 0';
   worldRevision++;shadowSignature='';updateStreaming();placeMemoryViewer();renderer.shadowsDirty=true;
   const url=new URL(location.href);if(memorySettings.archetype)url.searchParams.set('archetype',memorySettings.archetype);else url.searchParams.delete('archetype');url.searchParams.set('variation',memorySettings.salt);url.searchParams.set('settings',JSON.stringify(memorySettings));history.replaceState(null,'',url);
 }
@@ -1725,7 +1839,7 @@ function generateChunk(cx,cy) {
   const roomDoors=spec.sides.map(side=>getDoor(cx,cy,side));
   roomDoors.cx=cx;roomDoors.cy=cy;
   const {cells,entries}=createLayout(spec,roomDoors,random);
-  const room={id,cx,cy,height,kind:spec.kind,cells,entries,doors:roomDoors,falseDoors:[],ceilingDoors:[],fixtures:[],fragment:null,mesh:null};
+  const room={id,cx,cy,height,kind:spec.kind,cells,entries,doors:roomDoors,falseDoors:[],ceilingDoors:[],fixtures:[],fragment:null,mesh:null,museumRole:spec.museumRole||null,museumInteractions:[]};
   room.archetype=spec.archetype;room.pocket=spec.pocket;
   const shade=0.88+random()*0.17,color=palette.wall.map(n=>n*shade);
   if(room.archetype)addMemoryFloor(room,mesh);
@@ -1804,7 +1918,9 @@ function generateChunk(cx,cy) {
   }
   if(!room.archetype){addFalseDoors(room,mesh,random);addCeilingDoors(room,random);}
   addDoorwayLights(room,mesh);
-  if(room.archetype)buildMemoryRoom(room,mesh);else furnishRoom(room,mesh);
+  if(room.museumRole)buildMuseumRoom(room,mesh);
+  else if(room.archetype)buildMemoryRoom(room,mesh);
+  else furnishRoom(room,mesh);
   addRoomRelief(room,mesh);
   if(spec.kind!=='empty') {
     const index=accessible[Math.floor(random()*accessible.length)];
@@ -1813,6 +1929,247 @@ function generateChunk(cx,cy) {
   room.mesh=mesh.upload([x0,y0,0]);chunks.set(id,room);worldRevision++;return room;
 }
 
+
+
+function addMuseumInteraction(room,id,label,position,type='info',radius=2.8,data=null){
+  room.museumInteractions.push({id,label,position,type,radius,data});return room.museumInteractions[room.museumInteractions.length-1];
+}
+function appendMuseumMannequin(room,mesh,position,{body=0,pose='upright',surface=4,yaw=0,scale=1}={}){
+  const model=buildMannequinModel(body,pose,surface,'',[0,0,0],null,0),t=propTransform(position,[yaw,0,0]),a=t.matrix,data=model.data;
+  for(let i=0;i<data.length;i+=12){
+    const x=data[i]*scale,y=data[i+1]*scale,z=data[i+2]*scale,nx=data[i+3],ny=data[i+4],nz=data[i+5];
+    mesh.vertices.push(a[0]*x+a[1]*y+a[2]*z+position[0],a[3]*x+a[4]*y+a[5]*z+position[1],a[6]*x+a[7]*y+a[8]*z+position[2],
+      a[0]*nx+a[1]*ny+a[2]*nz,a[3]*nx+a[4]*ny+a[5]*nz,a[6]*nx+a[7]*ny+a[8]*nz,...data.slice(i+6,i+12));
+  }
+  room.props.push({type:'museumMannequin',body,pose,surface,position,rotation:[yaw,0,0],bounds:{min:[position[0]-.35,position[1]-.35,position[2]],max:[position[0]+.35,position[1]+.35,position[2]+2.2*scale]}});
+}
+function addMuseumMicrophone(mesh,x,y,z=.55){
+  mesh.cylinder([x,y,z],[x,y,z+1.05],.018,palette.metal);
+  mesh.cylinder([x,y,z+1.03],[x+.12,y,z+1.13],.018,palette.edge);
+  mesh.cylinder([x+.12,y,z+1.13],[x+.22,y,z+1.13],.038,[.08,.075,.07],[-2,.45,.05],8);
+  mesh.cylinder([x-.14,y,z-.03],[x+.14,y,z-.03],.035,palette.metal);
+}
+function buildMuseumRoom(room,mesh){
+  room.props=[];room.museumInteractions=[];room.furnishing={theme:'museum',groups:[],routes:[],objectDensity:0};
+  const x=room.cx*CHUNK_SIZE,y=room.cy*CHUNK_SIZE,brass=[.42,.36,.22],velvet=[.31,.035,.045],museumWood=[.20,.15,.10],paper=[.62,.59,.49],black=[.025,.027,.025],red=[.28,.045,.04];
+  // Repeated institutional elements keep the anthology visually coherent.
+  mesh.box(x+22.8,y+47.66,2.4,.22,0,2.7,red,0,true);
+  mesh.box(x+22.55,y+47.42,2.9,.08,2.72,2.82,brass);
+  addMuseumInteraction(room,room.id+'/staff','STAFF INTERPRETATION ONLY',[x+24,y+47.15,1.45],'staff',3.0);
+  for(const sx of [8,40])mesh.cylinder([x+sx,y+4,.02],[x+sx,y+4,.85],.035,brass);
+
+  if(room.museumRole==='lobby'){
+    mesh.box(x+10.5,y+10.2,5.6,1.45,0,1.05,museumWood,0,true);
+    mesh.box(x+10.2,y+9.93,6.2,.12,1.05,1.14,brass);
+    mesh.box(x+5.6,y+5.85,3.4,.12,1.0,2.2,brass);
+    mesh.box(x+5.86,y+5.70,2.88,.035,1.25,1.96,black);
+    addMuseumInteraction(room,room.id+'/plaque','Read museum plaque',[x+7.3,y+5.55,1.55],'plaque',3.0,{title:'THE MUSEUM OF NECESSARY LESSONS',text:'Please proceed in the direction indicated. Discomfort should not be mistaken for injustice.'});
+    appendProp(room,mesh,'sofa',0,[x+17,y+14,0],[Math.PI/2,0,0],'museum');
+    appendProp(room,mesh,'standingLamp',1,[x+19,y+13.2,0],[0,0,0],'museum');
+    mesh.box(x+39,y+19,5.7,.1,0,2.35,brass);
+    addMuseumInteraction(room,room.id+'/exhibitSign','Inspect Exhibit One sign',[x+38.7,y+18.7,1.5],'plaque',3.2,{title:'EXHIBIT 01',text:'THE COMEDIAN WHO WHINES — Please remain behind the viewing line.'});
+  }
+
+  if(room.museumRole==='comedian-intro'){
+    // Stage, curtains and crude audience reconstruction.
+    mesh.box(x+34,y+11,10.8,26,0,.42,museumWood,0,true);
+    mesh.box(x+44.4,y+8.4,.36,31.2,.42,3.7,velvet,0,true);
+    for(const yy of [10,14,18,22,26,30,34,38])mesh.box(x+43.85,y+yy,.45,2.0,.42,3.6,[.24,.025,.032]);
+    addMuseumMicrophone(mesh,x+38.4,y+24,.48);
+    appendMuseumMannequin(room,mesh,[x+40.2,y+24,.42],{body:3,pose:'upright',surface:1,yaw:Math.PI});
+    const seats=[[20,17],[20,23],[20,29],[25,15],[25,21],[25,27],[25,33],[30,18],[30,24],[30,30]];
+    seats.forEach(([sx,sy],i)=>{
+      appendProp(room,mesh,'lawnChair',i%7,[x+sx,y+sy,0],[Math.PI/2,0,0],'audience');
+      appendMuseumMannequin(room,mesh,[x+sx,y+sy,.43],{body:i%14,pose:'sitting',surface:i===4?1:4,yaw:0,scale:.96});
+    });
+    addMuseumInteraction(room,room.id+'/safeTarget','Inspect selected audience member',[x+25,y+21,1.2],'target',2.8,{title:'SAFE TARGET',text:'“I moved back home to help my mother.”'});
+    // Interpretation station.
+    mesh.box(x+35.5,y+5.8,7.8,1.6,0,1.05,black,0,true);
+    mesh.box(x+36.1,y+5.48,6.6,.12,1.05,1.68,brass);
+    for(let i=0;i<3;i++)mesh.box(x+36.6+i*2.15,y+5.25,1.45,.16,1.18,1.42,i===0?paper:[.30,.29,.25]);
+    mesh.cylinder([x+39.4,y+5.1,1.48],[x+39.4,y+5.1,1.62],.09,palette.edge);
+    addMuseumInteraction(room,room.id+'/dial','Turn interpretation dial',[x+39.4,y+5.0,1.35],'dial',3.2);
+  }
+
+  if(room.museumRole==='comedian-trial'){
+    mesh.box(x+15,y+14,17,20,0,.34,black,0,true);
+    mesh.box(x+17,y+16,13,16,.34,.43,museumWood);
+    addMuseumMicrophone(mesh,x+23.2,y+24,.48);
+    appendMuseumMannequin(room,mesh,[x+25,y+24,.43],{body:3,pose:'upright',surface:1,yaw:Math.PI});
+    // Copies of the comedian form the audience. Their identical bodies make the
+    // final judgment feel manufactured rather than naturally observed.
+    const copies=[[8,10],[8,18],[8,26],[8,34],[39,10],[39,18],[39,26],[39,34],[14,40],[23,40],[32,40]];
+    copies.forEach(([sx,sy],i)=>appendMuseumMannequin(room,mesh,[x+sx,y+sy,0],{body:3,pose:i%3===0?'armsWide':'upright',surface:3,yaw:Math.atan2(24-sy,24-sx)}));
+    mesh.box(x+4.5,y+21.8,5.2,4.4,0,1.1,[.10,.11,.095],0,true);
+    mesh.box(x+5,y+22.3,4.2,3.4,1.1,1.24,brass);
+    addMuseumInteraction(room,room.id+'/trialConsole','Replay subject explanation',[x+7.1,y+24,1.28],'trialConsole',3.0);
+    addMuseumInteraction(room,room.id+'/trialPlaque','Read correction notice',[x+11,y+7,1.4],'plaque',3.0,{title:'THE CORRECTION',text:'The subject may speak. The audience is not required to listen.'});
+  }
+
+  if(room.museumRole==='comedian-final'){
+    mesh.box(x+19,y+18,10,12,0,.18,[.08,.075,.065],0,true);
+    mesh.box(x+20.4,y+19.4,7.2,9.2,.18,1.02,museumWood,0,true);
+    // Display-case frame; intentionally opaque/low-tech instead of modern glass.
+    for(const px of [20.5,27.4])for(const py of [19.5,28.4])mesh.cylinder([x+px,y+py,1.0],[x+px,y+py,3.25],.028,brass);
+    for(const py of [19.5,28.4])mesh.cylinder([x+20.5,y+py,3.25],[x+27.4,y+py,3.25],.028,brass);
+    for(const px of [20.5,27.4])mesh.cylinder([x+px,y+19.5,3.25],[x+px,y+28.4,3.25],.028,brass);
+    addMuseumMicrophone(mesh,x+24,y+24,.75);
+    mesh.box(x+20.8,y+18.95,6.4,.14,.8,1.55,brass);
+    addMuseumInteraction(room,room.id+'/microphone','Examine final object',[x+24,y+22.7,1.55],'microphone',3.4);
+  }
+
+  if(room.museumRole==='future-wing'){
+    mesh.box(x+14,y+16,20,.18,0,3.2,black,0,true);
+    mesh.box(x+18,y+15.7,12,.08,1.0,2.25,brass);
+    addMuseumInteraction(room,room.id+'/future','Inspect closed gallery',[x+24,y+15.4,1.55],'future',4.0);
+  }
+}
+function museumSave(){
+  try{localStorage.setItem(MUSEUM_SAVE_KEY,JSON.stringify(museumObservation));}catch(error){}
+}
+function museumCard(title,text='',duration=4700){
+  if(!MUSEUM_MODE)return;const card=document.getElementById('museumTitleCard');
+  card.querySelector('strong').textContent=title;card.querySelector('span').textContent=text;card.classList.add('visible');
+  clearTimeout(museumCardTimer);museumCardTimer=setTimeout(()=>card.classList.remove('visible'),duration);
+}
+function museumSubtitle(speaker,text,duration=5200){
+  const box=document.getElementById('museumSubtitle');box.querySelector('b').textContent=speaker;box.querySelector('span').textContent=text;box.classList.add('visible');
+  clearTimeout(museumSubtitleTimer);museumSubtitleTimer=setTimeout(()=>box.classList.remove('visible'),duration);
+}
+function museumVoice(speaker){
+  if(!('speechSynthesis'in window))return null;
+  const voices=speechSynthesis.getVoices(),preferred=speaker==='CURATOR'
+    ?[/George/i,/David/i,/Daniel/i,/Alex/i,/Male/i]
+    :[/Mark/i,/Guy/i,/Tom/i,/Male/i];
+  for(const pattern of preferred){const voice=voices.find(v=>/^en/i.test(v.lang)&&pattern.test(v.name));if(voice)return voice;}
+  return voices.find(v=>/^en/i.test(v.lang))||null;
+}
+function stopMuseumNarration(){museumNarrationToken++;if('speechSynthesis'in window)speechSynthesis.cancel();}
+function playMuseumNarration(lines,speaker='CURATOR'){
+  if(!MUSEUM_MODE||!lines?.length)return;const token=++museumNarrationToken;let index=0;
+  const next=()=>{
+    if(token!==museumNarrationToken||index>=lines.length)return;
+    const text=lines[index++],duration=Math.max(1600,Math.min(8000,text.length*58));
+    museumSubtitle(speaker,text,duration);
+    if('speechSynthesis'in window){
+      const utterance=new SpeechSynthesisUtterance(text);utterance.rate=speaker==='CURATOR'?.82:.9;utterance.pitch=speaker==='CURATOR'?.76:.9;utterance.volume=.78;
+      const voice=museumVoice(speaker);if(voice)utterance.voice=voice;utterance.onend=()=>setTimeout(next,260);utterance.onerror=()=>setTimeout(next,duration);
+      speechSynthesis.speak(utterance);
+    }else setTimeout(next,duration);
+  };next();
+}
+function museumAudioContext(){
+  if(museumAudioCtx)return museumAudioCtx;
+  try{museumAudioCtx=new (window.AudioContext||window.webkitAudioContext)();museumAudioCtx.resume().catch(()=>{});}catch(error){museumAudioCtx=null;}
+  return museumAudioCtx;
+}
+function playMuseumClap(gainAmount=.16){
+  const context=museumAudioContext();if(!context)return;
+  const length=Math.floor(context.sampleRate*.11),buffer=context.createBuffer(1,length,context.sampleRate),data=buffer.getChannelData(0);
+  for(let i=0;i<length;i++)data[i]=(Math.random()*2-1)*Math.exp(-i/(context.sampleRate*.018));
+  const source=context.createBufferSource(),filter=context.createBiquadFilter(),gain=context.createGain();
+  source.buffer=buffer;filter.type='bandpass';filter.frequency.value=1450;filter.Q.value=.7;gain.gain.value=gainAmount;
+  source.connect(filter);filter.connect(gain);gain.connect(context.destination);source.start();
+}
+function playMuseumLaughter(duration=2.8){
+  const context=museumAudioContext();if(!context)return;
+  const now=context.currentTime;
+  for(let i=0;i<10;i++){
+    const osc=context.createOscillator(),gain=context.createGain(),filter=context.createBiquadFilter();
+    osc.type=i%2?'sawtooth':'triangle';osc.frequency.value=120+Math.random()*130;filter.type='lowpass';filter.frequency.value=700+Math.random()*600;
+    const start=now+Math.random()*.35,end=start+duration*(.48+Math.random()*.42);
+    gain.gain.setValueAtTime(.0001,start);gain.gain.exponentialRampToValueAtTime(.018+Math.random()*.018,start+.08);gain.gain.setValueAtTime(.014+Math.random()*.012,Math.max(start+.1,end-.12));gain.gain.exponentialRampToValueAtTime(.0001,end);
+    osc.connect(filter);filter.connect(gain);gain.connect(context.destination);osc.start(start);osc.stop(end+.03);
+  }
+  museumState.distortion=Math.max(museumState.distortion,.7);document.body.classList.add('museum-distort');setTimeout(()=>document.body.classList.remove('museum-distort'),duration*1000);
+}
+function startMuseumClapLoop(){
+  stopMuseumClapLoop();playMuseumClap(.13);museumClapTimer=setInterval(()=>playMuseumClap(.13),2350);
+}
+function stopMuseumClapLoop(){if(museumClapTimer){clearInterval(museumClapTimer);museumClapTimer=null;}}
+function comedianTrialSequence(){
+  const token=++museumState.sequenceToken;
+  const later=(ms,fn)=>setTimeout(()=>{if(token===museumState.sequenceToken&&museumState.role==='comedian-trial')fn();},ms);
+  later(900,()=>playMuseumNarration(['The subject has requested an opportunity to clarify what he meant.'], 'CURATOR'));
+  later(5400,()=>{stopMuseumNarration();museumSubtitle('COMEDIAN','I was talking about a specific person. That is not what I—',4200);if('speechSynthesis'in window){const u=new SpeechSynthesisUtterance('I was talking about a specific person. That is not what I meant.');u.rate=.95;u.pitch=.88;u.volume=.72;const v=museumVoice('COMEDIAN');if(v)u.voice=v;speechSynthesis.speak(u);}later(900,()=>{museumObservation.explanationOverrides++;museumSave();playMuseumLaughter(3.2);museumSubtitle('AUDIENCE','[LAUGHTER OVERRIDES SUBJECT]',3000);});});
+  later(10800,()=>playMuseumNarration(['The subject has requested context. Context was not previously considered necessary.'],'CURATOR'));
+  later(16000,()=>{stopMuseumNarration();museumSubtitle('COMEDIAN','No. Listen to me. You are changing what I said—',4300);if('speechSynthesis'in window){const u=new SpeechSynthesisUtterance('No. Listen to me. You are changing what I said.');u.rate=1;u.pitch=.9;u.volume=.72;speechSynthesis.speak(u);}later(650,()=>{museumObservation.explanationOverrides++;museumSave();playMuseumLaughter(3.6);museumSubtitle('AUDIENCE','[APPLAUSE AND LAUGHTER]',3200);});});
+  later(23500,()=>{stopMuseumNarration();museumSubtitle('COMEDIAN','It was just a joke.',4500);if('speechSynthesis'in window){const u=new SpeechSynthesisUtterance('It was just a joke.');u.rate=.78;u.pitch=.84;u.volume=.72;speechSynthesis.speak(u);}later(700,()=>{museumObservation.explanationOverrides++;museumSave();playMuseumLaughter(2.7);playMuseumClap(.24);setTimeout(()=>playMuseumClap(.2),720);museumSubtitle('AUDIENCE','[THE RESPONSE CONTINUES AFTER HE STOPS SPEAKING]',4300);});});
+}
+function museumEnterRole(role){
+  museumState.previousRole=museumState.role;museumState.role=role;museumState.enteredAt=elapsed;museumState.sequenceToken++;stopMuseumNarration();stopMuseumClapLoop();
+  if(!role)return;
+  if(museumState.previousRole){
+    const order=['lobby','comedian-intro','comedian-trial','comedian-final','future-wing'],a=order.indexOf(museumState.previousRole),b=order.indexOf(role);if(a>=0&&b>=0&&b<a)museumObservation.backtracks++;
+  }
+  museumObservation.visits.push({role,time:Date.now()});if(museumObservation.visits.length>80)museumObservation.visits.shift();museumSave();
+  const def=Object.values(MUSEUM_ROOM_DEFS).find(d=>d.role===role);if(def)museumCard(def.title,role==='lobby'?'A guided exhibition in corrective perspective.':'',4200);
+  if(role==='lobby')playMuseumNarration(['Welcome, visitor.','Please proceed once you understand.','The exhibit does not require your sympathy.']);
+  if(role==='comedian-intro')playMuseumNarration(COMEDIAN_INTRO_NARRATION);
+  if(role==='comedian-trial')comedianTrialSequence();
+  if(role==='comedian-final'){startMuseumClapLoop();playMuseumNarration(['Please approach the final object.','The recording is part of the exhibit.']);}
+  if(role==='future-wing')playMuseumNarration(['Further lessons are currently being prepared.','Please do not mistake an unfinished gallery for an exit.']);
+}
+function chooseMuseumInteraction(){
+  if(!MUSEUM_MODE)return null;const room=chunks.get(currentChunkKey());if(!room?.museumInteractions?.length)return null;
+  const eye=cameraEye(),forward=[Math.cos(player.yaw)*Math.cos(player.pitch),Math.sin(player.yaw)*Math.cos(player.pitch),Math.sin(player.pitch)];
+  let chosen=null,best=Infinity;
+  for(const item of room.museumInteractions){
+    const delta=item.position.map((v,i)=>v-eye[i]),distance=Math.hypot(...delta);if(distance>item.radius||distance>=best)continue;
+    if(dot(normalize(delta),forward)<.58)continue;chosen=item;best=distance;
+  }return chosen;
+}
+function interactMuseum(){
+  const item=chooseMuseumInteraction();if(!item)return false;
+  if(item.type==='staff'){
+    museumObservation.restrictedAttempts++;museumSave();museumState.distortion=Math.max(museumState.distortion,.25);
+    playMuseumNarration(['That door is not part of the exhibit.','Please return.']);return true;
+  }
+  if(item.type==='plaque'){
+    museumCard(item.data?.title||'EXHIBIT',item.data?.text||'',6500);return true;
+  }
+  if(item.type==='target'){
+    museumCard(item.data.title,item.data.text,5800);
+    playMuseumNarration(['The chosen person answered honestly.','This was their first mistake.']);return true;
+  }
+  if(item.type==='dial'){
+    museumState.dialIndex=(museumState.dialIndex+1)%MUSEUM_INTERPRETATIONS.length;const interpretation=MUSEUM_INTERPRETATIONS[museumState.dialIndex];
+    museumObservation.dialChoices.push({choice:interpretation.name,time:Date.now()});if(museumObservation.dialChoices.length>60)museumObservation.dialChoices.shift();museumSave();
+    document.getElementById('museumChoice').textContent=interpretation.name+' — '+interpretation.line;document.getElementById('museumChoice').classList.add('visible');
+    museumCard(interpretation.name,interpretation.line,4200);playMuseumLaughter(1.45);
+    setTimeout(()=>document.getElementById('museumChoice').classList.remove('visible'),4300);return true;
+  }
+  if(item.type==='trialConsole'){comedianTrialSequence();return true;}
+  if(item.type==='microphone'){
+    if(!museumState.finalJudgmentPlayed){museumState.finalJudgmentPlayed=true;playMuseumNarration(COMEDIAN_FINAL_JUDGMENT);}
+    else museumCard('FINAL OBJECT','A microphone. One person continues to clap.',4300);
+    return true;
+  }
+  if(item.type==='future'){museumCard('FURTHER EXHIBITS','Additional corrections are under preparation.',5000);return true;}
+  return false;
+}
+function updateMuseum(dt){
+  if(!MUSEUM_MODE)return;
+  museumState.distortion*=Math.exp(-dt*2.8);
+  const room=chunks.get(currentChunkKey()),role=room?.museumRole||null;if(role!==museumState.role)museumEnterRole(role);
+  if(!role)return;
+  museumObservation.roomTime[role]=(museumObservation.roomTime[role]||0)+dt;
+  if(role==='comedian-trial'){
+    const subject=[room.cx*CHUNK_SIZE+25,room.cy*CHUNK_SIZE+24,1.25],eye=cameraEye(),to=normalize(subject.map((v,i)=>v-eye[i])),forward=[Math.cos(player.yaw)*Math.cos(player.pitch),Math.sin(player.yaw)*Math.cos(player.pitch),Math.sin(player.pitch)];
+    if(dot(to,forward)<.15){museumState.lookAwayClock+=dt;if(museumState.lookAwayClock>1.2){museumObservation.lookAway+=dt;}}
+    else museumState.lookAwayClock=0;
+  }else museumState.lookAwayClock=0;
+  if(elapsed-museumState.lastSave>4){museumState.lastSave=elapsed;museumSave();}
+}
+function setupMuseumExperience(){
+  if(!MUSEUM_MODE)return;
+  document.body.classList.add('museum-mode');document.title='The Museum of Necessary Lessons';
+  entry.querySelector('h1').textContent='THE MUSEUM OF NECESSARY LESSONS';
+  const paragraphs=entry.querySelectorAll('p');if(paragraphs[0])paragraphs[0].textContent='A guided exhibition in corrective perspective.';
+  if(paragraphs[1])paragraphs[1].innerHTML='WASD move · Mouse / arrows look<br>Shift sprint · E interact · Hold C controls<br>F2 room tools · B sound';
+  controls.innerHTML='WASD move · Mouse / arrows look<br>Shift sprint · E interact · Esc release mouse<br>F2 room tools · B sound';
+  status.textContent='EXHIBIT 01';mapButton.style.display='none';
+}
 
 function loadKey(id) {const [x,y]=id.split(',').map(Number);return generateChunk(x,y);}
 function currentChunkKey() {return chunkKey(Math.floor(player.x/CHUNK_SIZE),Math.floor(player.y/CHUNK_SIZE));}
@@ -2036,10 +2393,10 @@ function update(dt) {
     else doorRevision++;
   }
   updateStreaming();
-  updateMannequinFacing(dt);updateObservationAnomalies(elapsed);updateHum();
+  updateMannequinFacing(dt);updateObservationAnomalies(elapsed);updateHum();updateMuseum(dt);
   nearestDoor=chooseDoor();
-  const portal=choosePortal();
-  interaction.textContent=portal?`E — ${portal.label}`:nearestDoor?`E — ${nearestDoor.open?'Close':'Open'} door`:'';
+  const portal=choosePortal(),museumInteraction=chooseMuseumInteraction();
+  interaction.textContent=museumInteraction?`E — ${museumInteraction.label}`:portal?`E — ${portal.label}`:nearestDoor?`E — ${nearestDoor.open?'Close':'Open'} door`:'';
   controls.style.opacity=keys.has('KeyC')?'0.85':'0';
   const room=chunks.get(currentChunkKey());
   if(room&&room.fragment&&!collected.has(room.id)&&Math.hypot(player.x-room.fragment.x,player.y-room.fragment.y)<0.75){collected.add(room.id);player.fragments++;status.textContent=`Fragments ${player.fragments}`;}
@@ -2427,7 +2784,7 @@ function createRenderer() {
       }
       gl.disable(gl.SCISSOR_TEST);gl.bindFramebuffer(gl.FRAMEBUFFER,null);state.shadowsDirty=false;state.stats.shadowUpdates++;
     }
-    const usePost=!memorySettings.reducedMotion&&(Math.hypot(cameraMotion.turnX,cameraMotion.turnY)+cameraMotion.sprint>.015);
+    const usePost=MUSEUM_MODE||(!memorySettings.reducedMotion&&(Math.hypot(cameraMotion.turnX,cameraMotion.turnY)+cameraMotion.sprint>.015));
     if(usePost)prepareSceneTarget();gl.bindFramebuffer(gl.FRAMEBUFFER,usePost?sceneFramebuffer:null);
     gl.viewport(0,0,canvas.width,canvas.height);gl.clearColor(0.012,0.016,0.015,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(main);
     gl.uniformMatrix4fv(uniforms.uViewProjection,false,multiply(perspective(Math.PI*0.39,canvas.width/canvas.height,0.045,180),cameraMatrix(state.origin)));
@@ -2510,8 +2867,8 @@ document.addEventListener('keydown',event=>{
   if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Tab'].includes(event.code))event.preventDefault();
   if(!active)return;
   keys.add(event.code);
-  if(!event.repeat&&event.code==='KeyE')toggleDoor();
-  if(!event.repeat&&event.code==='KeyM')setMap(!mapVisible);
+  if(!event.repeat&&event.code==='KeyE'){if(!interactMuseum())toggleDoor();}
+  if(!event.repeat&&event.code==='KeyM'&&!MUSEUM_MODE)setMap(!mapVisible);
   if(!event.repeat&&event.code==='KeyB'){humEnabled=!humEnabled;updateHum();}
 });
 document.addEventListener('keyup',event=>keys.delete(event.code));
@@ -2531,11 +2888,12 @@ canvas.addEventListener('webglcontextrestored',()=>{
 });
 try {
   if(!gl)throw new Error('WebGL 2 is unavailable.');
-  renderer=createRenderer();resize();updateStreaming();setupRoomTools();
+  renderer=createRenderer();resize();updateStreaming();setupRoomTools();setupMuseumExperience();
   const entrance=chunks.get('0,0').cells[GRID+1];
   const facing=entrance.walls.findIndex(wall=>!wall);
-  player.yaw=[0,Math.PI/2,Math.PI,-Math.PI/2][Math.max(0,facing)]+0.12;
+  player.yaw=MUSEUM_MODE?0:[0,Math.PI/2,Math.PI,-Math.PI/2][Math.max(0,facing)]+0.12;
   placeMemoryViewer();
+  if(MUSEUM_MODE){player.x=CELL*1.5;player.y=CELL*1.5;player.yaw=0;resetLocomotion();}
   animationId=requestAnimationFrame(frame);
 } catch(error){showError(error);}
 </script>
