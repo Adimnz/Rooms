@@ -75,12 +75,13 @@ function clampMemorySetting(key,value){return Math.max(key==='width'||key==='dep
 let developerOpen=false,lastObservationCheck=-1,portalCooldown=0,lastEnteredRoom=null;
 const OBSERVATION_BUDGET={interval:.35,distance:42,checks:16,changes:2,hiddenDelay:1.5};
 const EYE_HEIGHT=1.62,PLAYER_HEIGHT=1.78,STEP_HEIGHT=.3,GROUND_SNAP=.4;
-const player = {x:CELL*1.5, y:CELL*1.5, z:EYE_HEIGHT,feetZ:0,vz:0,grounded:true,stamina:1,sprintRecovery:0,sprintSpeed:2.8,yaw:0.35, pitch:0, vx:0, vy:0, radius:0.23, fragments:0, distance:0};
+const player = {x:CELL*1.5, y:CELL*1.5, z:EYE_HEIGHT,feetZ:0,vz:0,grounded:true,stamina:1,sprintRecovery:0,sprintSpeed:2.8,yaw:0.35, pitch:0, vx:0, vy:0, radius:0.23, fragments:0, distance:0, rippleCooldown:0, waterTouch:false};
 const lookState={yaw:player.yaw,pitch:player.pitch,appliedYaw:player.yaw,appliedPitch:player.pitch};
 const cameraMotion={phase:0,x:0,y:0,z:0,roll:0,heightLag:0,turnX:0,turnY:0,sprint:0};
 let facingClock=0,lastFacingUpdate=0;
 let active = false, mapVisible = false, worldRevision = 0, doorRevision = 0;
 let activeLights = [], shadowSignature = '', lastBounceUpdate = -1;
+const waterRipples = [];
 let lastTime = 0, elapsed = 0, nearestDoor = null, animationId = 0;
 const palette = {wall:[0.49,0.51,0.495], floor:[0.24,0.265,0.26], ceiling:[0.48,0.50,0.48], trim:[0.25,0.28,0.275], edge:[0.53,0.55,0.52], metal:[0.12,0.145,0.145], dark:[0.055,0.065,0.065], door:[0.31,0.34,0.325], lamp:[0.87,0.92,0.85]};
 const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
@@ -783,6 +784,11 @@ const MEMORY_ARCHETYPES=[
   ['standing-audience','The Standing Audience','theater',18,'plain'],
   ['anti-perspective','The Anti-Perspective Room','hallway',24,'corridor'],
   ['pool-of-furniture','The Pool of Furniture','recreational area',14,'basin'],
+  ['pool-lantern-basin','The Lantern Basin','recreational area',16,'basin'],
+  ['pool-split-terraces','The Split Terraces','recreational area',18,'basin'],
+  ['pool-sunken-gallery','The Sunken Gallery','recreational area',18,'basin'],
+  ['pool-lotus-aisles','The Lotus Aisles','recreational area',16,'basin'],
+  ['pool-night-courtyard','The Night Courtyard','recreational area',18,'basin'],
   ['wall-of-doors','The Wall of Doors','waiting room',24,'plain'],
   ['furniture-constellation','The Furniture Constellation','living room',24,'plain'],
   ['gravity-argument','The Gravity Argument','living room',16,'plain'],
@@ -945,6 +951,8 @@ function memoryEntity(room,type,x,y,z=0,options={}) {
   const state=memoryStates.get(room.id),saved=state?.variation===memorySettings.salt?state.entities?.[e.id]:null;if(saved)Object.assign(e,structuredClone(saved));
   e.model=e.type==='mannequin'?buildMannequinModel(e.body,e.pose,e.surface,e.missing,e.head,e.point):memoryModel(e.type,e.variant);
   e.bounds=memoryBounds(e);
+  e.pushable = !['water','door','exitSign','stopSign'].includes(type) && !e.decorative && !options.allowRoute && e.bounds.max[0]-e.bounds.min[0] > 0.18 && e.bounds.max[1]-e.bounds.min[1] > 0.18;
+  if(e.pushable){const area=(e.bounds.max[0]-e.bounds.min[0])*(e.bounds.max[1]-e.bounds.min[1]);e.mass=Math.max(0.7,area*0.95);}
   // Low furniture is kept outside a continuous perimeter route and the spawn.
   const b=e.bounds,lo=[room.cx*CHUNK_SIZE,room.cy*CHUNK_SIZE];
   if(b.min[2]<1.9&&type!=='water'&&type!=='door'&&!options.allowRoute){
@@ -1369,6 +1377,36 @@ function buildMemoryRoom(room,mesh) {
     }
     case 'anti-perspective': {
       for(let i=0;i<10;i++){const y=8+i*3.4,size=.18+i*.3;prop('sofa',22,y,0,{scale:size});prop('bookshelf',27,y,0,{scale:size});prop('door',24,y,2.7+i*.25,{scale:.25+i*.28});}room.alignmentPoint=[ox+24,oy+4,1.62];break;
+    }
+    case 'pool-lantern-basin': {
+      prop('water',24,24,0,{scale:4.1});
+      for(const [x,y] of [[18,24],[30,24],[24,18],[24,30]]){prop('standingLamp',x,y,0,{scale:1.5});prop('lawnChair',x,y+2.3,0,{yaw:Math.PI/2});}
+      ring(8,8.2,(x,y)=>prop('lawnChair',x,y,0,{yaw:face(x,y)}));
+      prop('rockingChair',18,18,.1,{yaw:Math.PI/2});prop('rockingChair',30,30,.1,{yaw:-Math.PI/2});break;
+    }
+    case 'pool-split-terraces': {
+      prop('water',18,24,0,{scale:2.3});prop('water',30,24,0,{scale:2.3});
+      for(const [x,y] of [[12,24],[36,24],[24,18],[24,30]]){prop('standingLamp',x,y,0,{scale:1.4});prop('rockingChair',x,y+2.1,0,{yaw:Math.PI/2});}
+      for(let i=0;i<6;i++){const x=14+i*3.3;prop('lawnChair',x,20,.08,{yaw:-Math.PI/2});prop('lawnChair',x,28,.08,{yaw:Math.PI/2});}
+      break;
+    }
+    case 'pool-sunken-gallery': {
+      prop('water',24,24,0,{scale:5.2});
+      for(let i=0;i<5;i++){const x=12+i*6;prop('cabinet',x,16,0,{scale:[1.2,1,1.5]});prop('cabinet',x,32,0,{scale:[1.2,1,1.5]});}
+      ring(12,10,(x,y)=>prop('lawnChair',x,y,0,{yaw:face(x,y)}));
+      prop('standingLamp',24,12,0,{scale:2.2});prop('standingLamp',24,36,0,{scale:2.2});break;
+    }
+    case 'pool-lotus-aisles': {
+      prop('water',24,24,0,{scale:3.8});
+      for(const [x,y] of [[20,24],[28,24],[24,20],[24,28]]){prop('cabinet',x,y,0,{scale:[1.1,1,1.2]});prop('deskLamp',x,y+1.7,0,{scale:1.1});}
+      for(let i=0;i<8;i++){const a=i*Math.PI/4;const x=24+Math.cos(a)*9.5,y=24+Math.sin(a)*9.5;prop('lawnChair',x,y,0,{yaw:face(x,y)});}
+      prop('rockingChair',24,24,.22,{yaw:Math.PI/2});break;
+    }
+    case 'pool-night-courtyard': {
+      prop('water',24,24,0,{scale:4.4});
+      ring(10,9.5,(x,y)=>{prop('standingLamp',x,y,0,{scale:1.8});prop('lawnChair',x,y+2.1,0,{yaw:face(x,y)});});
+      for(const [x,y] of [[14,24],[34,24],[24,14],[24,34]]){prop('cabinet',x,y,0,{scale:[1.25,1,1.4]});}
+      prop('exitSign',24,8,2.8,{scale:2});break;
     }
     case 'pool-of-furniture': {
       for(let i=0;i<n(220);i++){const x=12+r()*24,y=12+r()*24,z=-3+.7*Math.sin(x*.5)+.5*Math.cos(y*.7);prop(['lawnChair','cabinet','standingLamp','rockingChair'][i%4],x,y,z,{rotation:[r()*6.28,r()*.3,r()*.3],behavior:i%23===0?'pool':''});}
@@ -1818,6 +1856,7 @@ function worldColliders(ignoreDoor=null) {
   const result=[];
   for(const room of chunks.values())result.push(...room.mesh.colliders);
   for(const room of chunks.values())if(room.entityColliders)result.push(...room.entityColliders);
+  for(const room of chunks.values())for(const e of room.entities||[])if(e.pushable&&e.bounds){const b=e.bounds;result.push({x:b.min[0],y:b.min[1],w:b.max[0]-b.min[0],d:b.max[1]-b.min[1],z0:b.min[2],z1:b.max[2],angle:0,color:palette.trim,entityId:e.id,dynamic:true});}
   for(const door of liveDoors())if(door!==ignoreDoor)result.push(doorCollider(door));
   return result;
 }
@@ -1937,6 +1976,44 @@ function toggleDoor() {
   } else door.target=door.baseAngle;
   doorRevision++;return true;
 }
+function updateDynamicObjects(dt) {
+  const colliders=worldColliders();
+  for(const room of chunks.values())for(const e of room.entities||[])if(e.pushable){
+    const playerDist=Math.hypot(player.x-e.position[0],player.y-e.position[1]);
+    if(playerDist<1.8){
+      const influence=Math.max(0,1-playerDist/1.8);
+      const pushX=(player.x-e.position[0])/Math.max(0.001,playerDist);
+      const pushY=(player.y-e.position[1])/Math.max(0.001,playerDist);
+      const basePush = (0.9 + Math.hypot(player.vx,player.vy)) * influence;
+      e.vx += (player.vx*0.9 + pushX*1.8)*basePush*dt*(22 + 18/Math.max(0.7,e.mass||1));
+      e.vy += (player.vy*0.9 + pushY*1.8)*basePush*dt*(22 + 18/Math.max(0.7,e.mass||1));
+    }
+    e.vx*=Math.exp(-dt*5.2);e.vy*=Math.exp(-dt*5.2);
+    if(Math.abs(e.vx)+Math.abs(e.vy)>0.0001){
+      const oldX=e.position[0],oldY=e.position[1];
+      e.position[0]+=e.vx*dt;e.position[1]+=e.vy*dt;
+      e.rotation[0]+=((e.vx+e.vy)*0.18)*dt;
+      for(const box of colliders){
+        if(box.entityId===e.id||box.guard||box.dynamic===undefined&&box.walkable===undefined&&!box.prop)continue;
+        const a={min:[e.bounds.min[0],e.bounds.min[1]],max:[e.bounds.max[0],e.bounds.max[1]]};
+        const b={min:[box.x,box.y],max:[box.x+box.w,box.y+box.d]};
+        const overlap=a.min[0]<b.max[0]&&a.max[0]>b.min[0]&&a.min[1]<b.max[1]&&a.max[1]>b.min[1];
+        if(overlap){
+          const dx=(a.max[0]+a.min[0])*.5-(b.max[0]+b.min[0])*.5;
+          const dy=(a.max[1]+a.min[1])*.5-(b.max[1]+b.min[1])*.5;
+          const overlapX=(a.max[0]-a.min[0])+(b.max[0]-b.min[0]) - Math.abs(dx)*2;
+          const overlapY=(a.max[1]-a.min[1])+(b.max[1]-b.min[1]) - Math.abs(dy)*2;
+          if(Math.abs(overlapX)>Math.abs(overlapY)){
+            const dir=Math.sign(dx||1);e.position[0]+=dir*Math.max(0.02,Math.abs(overlapX)*0.5);e.vx*=-0.35;
+          }else{
+            const dir=Math.sign(dy||1);e.position[1]+=dir*Math.max(0.02,Math.abs(overlapY)*0.5);e.vy*=-0.35;
+          }
+        }
+      }
+      e.bounds=memoryBounds(e);
+    }
+  }
+}
 function update(dt) {
   if(!active){cameraMotion.turnX*=Math.exp(-dt*15);cameraMotion.turnY*=Math.exp(-dt*15);cameraMotion.sprint*=Math.exp(-dt*8);return;}
   updateCameraLook(dt);
@@ -1950,6 +2027,8 @@ function update(dt) {
   const traveled=player.distance-oldDistance;
   if(sprinting&&traveled>dt*.5){player.stamina=Math.max(0,player.stamina-dt/8);player.sprintRecovery=1.3;}else{player.sprintRecovery=Math.max(0,player.sprintRecovery-dt);if(!sprinting&&player.sprintRecovery===0)player.stamina=Math.min(1,player.stamina+dt*.15);}
   updateWalkingMotion(dt,traveled,oldZ,sprinting);
+  updateDynamicObjects(dt);
+  updateWaterRipples(dt);
   for(const door of liveDoors())if(Math.abs(door.target-door.angle)>0.0001) {
     const previous=door.angle;door.angle+=(door.target-door.angle)*(1-Math.exp(-dt*6));
     if(Math.abs(door.target-door.angle)<0.001)door.angle=door.target;
@@ -2016,6 +2095,35 @@ function fixtureIntensity(light,time) {
   const t=(time+light.phase*1.71)%(17+light.phase%15);
   return t<0.04||(t>0.1&&t<0.14)?0.03:t<0.24?0.55:1;
 }
+function lightDistanceFade(distance, range, fadeDistance=range+4.4) {
+  const inner=range*0.35, maxDistance=Math.max(fadeDistance, range+1.5);
+  if(distance<=inner)return 1;
+  if(distance>=maxDistance)return 0;
+  return 1-Math.min(1,Math.max(0,(distance-inner)/(maxDistance-inner)));
+}
+function addWaterRipple(x,y,strength=1) {
+  waterRipples.push({x,y,strength,time:elapsed,ttl:1.4});
+  if(waterRipples.length>8)waterRipples.splice(0,waterRipples.length-8);
+}
+function updateWaterRipples(dt=0.016) {
+  for(let i=waterRipples.length-1;i>=0;i--){
+    const ripple=waterRipples[i];
+    ripple.strength*=0.96;
+    if(elapsed-ripple.time>ripple.ttl)waterRipples.splice(i,1);
+  }
+  const room=chunks.get(currentChunkKey());
+  if(!room||!room.entities||!player.grounded)return;
+  const water=room.entities.find(e=>e.type==='water'&&Math.hypot(player.x-e.position[0],player.y-e.position[1])<1.55&&Math.abs(player.z-e.position[2])<0.8);
+  if(water && !player.waterTouch) {
+    player.waterTouch=true;player.rippleCooldown=0.12;addWaterRipple(player.x,player.y,0.9);
+  } else if(!water) {
+    player.waterTouch=false;
+  }
+  if(player.rippleCooldown>0)player.rippleCooldown=Math.max(0,player.rippleCooldown-dt);
+  if(player.grounded && Math.hypot(player.vx,player.vy)>0.22 && !player.waterTouch && room.entities.some(e=>e.type==='water'&&Math.hypot(player.x-e.position[0],player.y-e.position[1])<1.3&&Math.abs(player.z-e.position[2])<0.8)){
+    addWaterRipple(player.x,player.y,0.35+Math.hypot(player.vx,player.vy)*0.22);
+  }
+}
 function updateLights(time) {
   const candidates=[],eye=[player.x,player.y,player.z],colliders=worldColliders();
   for(const room of chunks.values())for(const lamp of room.fixtures)if(!lamp.off) {
@@ -2027,8 +2135,6 @@ function updateLights(time) {
   candidates.sort(rank);
   const selected=[];
   for(const candidate of candidates){
-    // An occluded source can only lose importance. Once even an unobstructed
-    // remaining source cannot enter the light budget, further rays are useless.
     if(selected.length===DIRECT_LIGHTS&&candidate.score<selected[DIRECT_LIGHTS-1].score)break;
     const hit=rayWorld(eye,normalize(candidate.delta),candidate.distance,colliders);
     if(hit&&hit.distance<=candidate.distance-.3)candidate.score*=.16;
@@ -2039,10 +2145,8 @@ function updateLights(time) {
   if(signature!==shadowSignature||doorRevision!==renderer.lastDoorRevision||time-lastBounceUpdate>0.25) {
     const lights=[];
     for(const lamp of primary) {
-      lights.push({...lamp,source:lamp,indirect:false});
-      // A virtual point light at a real ray/surface intersection approximates
-      // one diffuse bounce. Its color and energy come from that surface and
-      // the emitting fixture, and it gets its own occlusion map.
+      const directDistance=Math.hypot(lamp.position[0]-player.x,lamp.position[1]-player.y,lamp.position[2]-player.z),fade=lightDistanceFade(directDistance,lamp.range);
+      lights.push({...lamp,source:lamp,indirect:false,fade,distance:directDistance,range:Math.max(lamp.range,Math.min(25,lamp.range+2.5))});
       const floorHit=rayWorld(lamp.position,lamp.axis,lamp.range,colliders);
       const hits=[];
       if(floorHit)hits.push(floorHit);
@@ -2061,8 +2165,9 @@ function updateLights(time) {
       for(const [i,hit]of hits.entries()) {
         const reflectance=hit.color.reduce((a,b)=>a+b,0)/3;
         const incidence=Math.max(0,dot(hit.normal,normalize(lamp.position.map((v,j)=>v-hit.position[j]))));
+        const bounceDistance=Math.hypot(hit.position[0]-player.x,hit.position[1]-player.y,hit.position[2]-player.z),bounceFade=lightDistanceFade(bounceDistance,7.5);
         lights.push({id:`${lamp.id}/bounce${i}`,source:lamp,indirect:true,position:hit.position.map((v,j)=>v+hit.normal[j]*0.085),axis:hit.normal,
-          range:7.5,power:lamp.power*reflectance*incidence*0.85/Math.max(1,hit.distance*hit.distance),color:lamp.color.map((v,j)=>v*hit.color[j]/Math.max(reflectance,0.01))});
+          range:7.5,power:lamp.power*reflectance*incidence*0.85/Math.max(1,hit.distance*hit.distance),color:lamp.color.map((v,j)=>v*hit.color[j]/Math.max(reflectance,0.01)),fade:bounceFade});
       }
     }
     const changed=signature!==shadowSignature||doorRevision!==renderer.lastDoorRevision;
@@ -2109,6 +2214,7 @@ function createRenderer() {
     uniform vec3 uCamera;
     uniform float uTime;
     uniform vec3 uAmbientLight;
+    uniform vec4 uPoolRipple;
     uniform int uLightCount;
     uniform vec4 uLightPosition[${MAX_LIGHTS}];
     uniform vec4 uLightColor[${MAX_LIGHTS}];
@@ -2152,6 +2258,13 @@ function createRenderer() {
       vec3 normal=normalize(vNormal),albedo=vColor;
       bool water=vMaterial.x<-.5&&vMaterial.x>-1.5;
       bool mannequin=vMaterial.x<-1.5;
+      if(water){
+        vec2 rippleOffset=vWorld.xy-uPoolRipple.xy;
+        float rippleDistance=length(rippleOffset);
+        float ripple=sin(rippleDistance*18.0-uTime*8.0)*exp(-rippleDistance*2.0)*uPoolRipple.z;
+        float shimmer=sin(vWorld.x*6.3+uTime*1.2)+sin(vWorld.y*7.7-uTime*.9);
+        normal=normalize(normal+vec3(rippleOffset.x, rippleOffset.y, 1.0) * (0.09*ripple + 0.04*shimmer));
+      }
       if(water&&normal.z>.8)normal=normalize(normal+vec3(sin(vWorld.x*9.0+uTime*.8)*.035,cos(vWorld.y*11.0-uTime*.6)*.035,0.0));
       float grain=fract(sin(dot(floor(vWorld*90.0),vec3(12.9898,78.233,39.425)))*43758.5453);
       albedo*=0.98+grain*0.04;
@@ -2187,7 +2300,8 @@ function createRenderer() {
         if(diffuse<0.001)continue;
         float cone=smoothstep(0.2,0.44,dot(-lightDir,uLightAxis[i].xyz));
         float edge=max(0.0,1.0-distance/range);
-        float energy=uLightColor[i].w*edge*edge/max(0.16,distance*distance)*cone;
+        float fade=clamp(1.0-(distance/max(range,0.001)-0.35)/(1.0-0.35),0.0,1.0);
+        float energy=uLightColor[i].w*edge*edge/max(0.16,distance*distance)*cone*fade;
         if(energy<0.0001)continue;
         float shadow=visibility(i,normal);
         vec3 radiance=uLightColor[i].rgb*energy*shadow;
@@ -2240,7 +2354,7 @@ function createRenderer() {
     gl.bindRenderbuffer(gl.RENDERBUFFER,sceneDepth);gl.renderbufferStorage(gl.RENDERBUFFER,gl.DEPTH_COMPONENT24,sceneWidth,sceneHeight);gl.bindFramebuffer(gl.FRAMEBUFFER,sceneFramebuffer);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,sceneTexture,0);gl.framebufferRenderbuffer(gl.FRAMEBUFFER,gl.DEPTH_ATTACHMENT,gl.RENDERBUFFER,sceneDepth);if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw new Error('Scene framebuffer is unavailable.');gl.bindFramebuffer(gl.FRAMEBUFFER,null);
   }
   const locations=(p,names)=>Object.fromEntries(names.map(n=>[n,gl.getUniformLocation(p,n)]));
-  const uniforms=locations(main,['uViewProjection','uMeshOffset','uCamera','uTime','uAmbientLight','uLightCount','uLightPosition[0]','uLightColor[0]','uLightAxis[0]','uLightMatrix[0]','uShadowAtlas','uInstanced']);
+  const uniforms=locations(main,['uViewProjection','uMeshOffset','uCamera','uTime','uAmbientLight','uPoolRipple','uLightCount','uLightPosition[0]','uLightColor[0]','uLightAxis[0]','uLightMatrix[0]','uShadowAtlas','uInstanced']);
   const shadowUniforms=locations(shadow,['uLightMatrix','uMeshOffset','uInstanced']);
   const atlas=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,atlas);
   gl.texImage2D(gl.TEXTURE_2D,0,gl.DEPTH_COMPONENT24,SHADOW_SIZE*4,SHADOW_SIZE*3,0,gl.DEPTH_COMPONENT,gl.UNSIGNED_INT,null);
@@ -2318,11 +2432,14 @@ function createRenderer() {
     gl.viewport(0,0,canvas.width,canvas.height);gl.clearColor(0.012,0.016,0.015,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(main);
     gl.uniformMatrix4fv(uniforms.uViewProjection,false,multiply(perspective(Math.PI*0.39,canvas.width/canvas.height,0.045,180),cameraMatrix(state.origin)));
     const eye=cameraEye();gl.uniform3f(uniforms.uCamera,eye[0]-ox,eye[1]-oy,eye[2]);gl.uniform1f(uniforms.uTime,time);gl.uniform1i(uniforms.uLightCount,activeLights.length);
+    const ripple=waterRipples.reduce((best,current)=>current.strength>best.strength?current:best,{x:player.x,y:player.y,strength:0});
+    gl.uniform4f(uniforms.uPoolRipple,ripple.x-ox,ripple.y-oy,ripple.strength,1.0);
     gl.uniform3f(uniforms.uAmbientLight,memorySettings.ambientLight,memorySettings.ambientLight*.88,memorySettings.ambientLight*.73);
     const positions=new Float32Array(MAX_LIGHTS*4),colors=new Float32Array(MAX_LIGHTS*4),axes=new Float32Array(MAX_LIGHTS*4),matrices=new Float32Array(MAX_LIGHTS*16);
     activeLights.forEach((light,i)=>{
-      positions.set([...light.relative,light.range],i*4);
-      colors.set([...light.color,light.power*fixtureIntensity(light.source,time)],i*4);
+      const fade=light.fade ?? 1;const range=Math.max(light.range||10,10);positions.set([...light.relative,range],i*4);
+      const intensity=Math.max(0,light.power*fixtureIntensity(light.source,time)*fade);
+      colors.set([...light.color.map(v=>v*fade),intensity],i*4);
       axes.set([...light.axis,light.indirect?1:0],i*4);matrices.set(light.matrix,i*16);
     });
     gl.uniform4fv(uniforms['uLightPosition[0]'],positions);gl.uniform4fv(uniforms['uLightColor[0]'],colors);gl.uniform4fv(uniforms['uLightAxis[0]'],axes);gl.uniformMatrix4fv(uniforms['uLightMatrix[0]'],false,matrices);
