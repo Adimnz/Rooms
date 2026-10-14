@@ -4,7 +4,7 @@
 const WEST=80, ROW=-80, KEY='lightup.annex.v1';
 const exhibits=[
  {title:'THE ARRIVAL', lines:['Welcome, visitor.','These rooms are reserved for necessary lessons.','You are not required to agree.','You are only required to continue.'], object:'Reception ledger', choices:['Read the visitor instructions'], answers:['A reasonable visitor will remain attentive. Please proceed once you understand.']},
- {title:'THE COMEDIAN WHO WHINES', lines:['The comedian would take the stage. Looking around. Surveying.','Seeing who could be targeted. Seeing who could not.','The confident could answer back. The angry might interrupt.','So he searched instead for someone uncertain.','A person became a character. A circumstance became a flaw.','A perspective became a fable. And the fable became a mockery.','The mockery became truth, provided enough people laughed.'],object:'Interpretation dial', choices:['JOKE','COMPLAINT','CONFESSION'], answers:['ADULT REFUSES TO GROW UP.','ANOTHER ADULT EXPECTING THE WORLD TO CARRY THEM.','I DO NOT KNOW WHY THIS BOTHERS ME.']},
+ {title:'THE COMEDIAN WHO WHINES', lines:['The comedian would take the stage. Looking around. Surveying.','Seeing who could be targeted. Seeing who could not.','The confident could answer back. The angry might interrupt.','So he searched instead for someone uncertain.','A person became a character. A circumstance became a flaw.','A perspective became a fable. And the fable became a mockery.','The mockery became truth, provided enough people laughed.','He would ask a question. A simple question, presented as harmless.','Where are you from? What do you do? Who did you arrive with?','The chosen person would answer honestly. This was their first mistake.','He would remove the circumstances, discard what made the answer complicated, and replace what remained.','As his performance drew near a conclusion, the comedian would begin to whine.','He complained as though every difficult life contained a simple answer.','The audience laughed. Therefore he believed himself understood.','The subject remained silent. Therefore he believed himself correct.','But silence is not always agreement.','Sometimes a person is simply waiting for the laughter to end.'],object:'Interpretation dial', choices:['JOKE','COMPLAINT','CONFESSION'], answers:['ADULT REFUSES TO GROW UP.','ANOTHER ADULT EXPECTING THE WORLD TO CARRY THEM.','I DO NOT KNOW WHY THIS BOTHERS ME.']},
  {title:'THE COMPLAINT CHAMBER', lines:['He complained about the foolish, the poor, the lonely and the frightened.','He complained as though observation were experience.','He complained as though ridicule were instruction.','A lesson was therefore prepared.','He would be permitted to explain himself. Whether he would be heard was another matter.'], object:'Complaint mechanism',choices:['Leave','Work harder','Explain'],answers:['The exits have been removed.','Your workload has been increased beyond completion.','[The audience laughs until the explanation is inaudible.]']},
  {title:'THE LAST PERFORMANCE', lines:['He says the room is unfair. The audience finds this amusing.','He says context is important now. The audience laughs again.','He has not been given the microphone for that purpose.','He asks, quietly, if he might finish.'],object:'Final microphone',choices:['Hear the last defense','Inspect the displayed microphone'],answers:['“It was just a joke.” [The audience laughter overrides everything that follows.]','One individual claps. Slowly. The comedian wanted the troubled to stop complaining. In time, he did.']},
  {title:'THE MOTHER WHO HELD TOO TIGHTLY',lines:['The mother knew the world contained dangers.','Where none could be found, she prepared for those that might eventually arrive.','Her child was kept safe from failure, from strangers, from consequence.','In time he was also kept safe from becoming anyone at all.'],object:'Protection console',choices:['Remove the stairs','Seal the doors','Prevent movement'],answers:['She might fall. The stairs have been removed.','The hallways are not sufficiently safe. Every exit has been sealed.','The bed now restrains her. This is being done because she is loved.']},
@@ -106,7 +106,7 @@ function buildAuthored(room,m,id){
  }else if(id===1){
   stage(m,x,y);
   for(let a=0;a<10;a++){const sx=14+(a%3)*4.7,sy=14+Math.floor(a/3)*6;
-   seat(m,x+sx,y+sy);figure(m,x+sx,y+sy,.53,'sitting',a%12,0,.94);}
+   seat(m,x+sx,y+sy);figure(m,x+sx,y+sy,.53,'sitting',a%12,Math.min(2,records.actions[room.id+'/choice']||0)*.26,.94);}
   stand(26,6);
   roomItem(room,'target','Inspect chosen audience member',x+18.7,y+20,1.45,
    ['ORIGINAL: “I moved back home to help my mother.”','The circumstances are removed.','The comedian presents his own version to the audience.']);
@@ -168,6 +168,20 @@ function buildAuthored(room,m,id){
     seat(m,sx,sy);figure(m,sx,sy,.5,'sitting',a);}
   }
   caseModel(m,x+39,y+38);
+  // Each repeated correction makes the reconstructed space less plausible.
+  // Changes are local to this annex room and use existing materials.
+  const correction=Math.min(4,records.actions[room.id+'/choice']||0);
+  for(let n=0;n<correction;n++){
+   if(id===4)line(m,[x+19+n*2,y+19,.1],[x+19+n*2,y+19,3.2],.04,metal);
+   if(id===5)screen(m,x+14+n*6,y+35,1.45);
+   if(id===6)arch(m,x+16+n*5,y+36);
+   if(id===7)shape(m,x+14+n*4,y+38,2.4,.14,1.2,1.8,pale);
+   if(id===8)line(m,[x+18+n*3,y+37,0],[x+18+n*3,y+37,3.4],.055,metal);
+   if(id===9)shape(m,x+14+n*6,y+38,.5,.5,1.0,.4,pale);
+   if(id===10)shape(m,x+16+n*5,y+38,3.0,.2,1.0,2.2,metal);
+   if(id===11)shape(m,x+13+n*6,y+37,.4,.4,1.0,.23,pale);
+   if(id===12)screen(m,x+14+n*5,y+37,1.3);
+  }
   if(id===4)shape(m,x+39,y+38,.33,.33,1,.35,pale);
   if(id===5)line(m,[x+38.7,y+38,1.1],[x+39.3,y+38,1.1],.04,pale);
   if(id===6)shape(m,x+39,y+38,.55,.18,1.1,.15,pale);
@@ -249,6 +263,8 @@ function perform(item){
   if(index===2||index===3)intro.push('[The mechanical audience begins to laugh. His answer cannot be heard.]');
   intro.push('The interpretation has been recorded.');
   textLines(intro);
+  const room=chunks.get(currentChunkKey());
+  if(room&&room.annex){disposeRoom(room);chunks.delete(room.id);loadKey(room.id);worldRevision++;}
  }else if(item.kind==='clap'){
   textLines(item.lines);clapAt=0;
  }else textLines(item.lines);
